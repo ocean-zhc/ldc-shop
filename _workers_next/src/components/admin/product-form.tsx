@@ -1,6 +1,6 @@
 'use client'
 
-import { saveProduct } from "@/actions/admin"
+import { getProductForAdminAction, saveProduct } from "@/actions/admin"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
@@ -16,14 +16,39 @@ export default function ProductForm({ product, categories = [] }: { product?: an
     const router = useRouter()
     const [loading, setLoading] = useState(false)
     const submitLock = useRef(false)
+    const [currentProduct, setCurrentProduct] = useState(product)
+    const [formSeed, setFormSeed] = useState(0)
     // Only show warning section if purchaseWarning has actual content
     const [showWarning, setShowWarning] = useState(Boolean(product?.purchaseWarning && String(product.purchaseWarning).trim()))
     const [visibilityLevel, setVisibilityLevel] = useState(String(product?.visibilityLevel ?? -1))
     const { t } = useI18n()
 
     useEffect(() => {
+        setCurrentProduct(product)
+        setShowWarning(Boolean(product?.purchaseWarning && String(product.purchaseWarning).trim()))
         setVisibilityLevel(String(product?.visibilityLevel ?? -1))
-    }, [product?.visibilityLevel])
+        setFormSeed((s) => s + 1)
+    }, [product?.id])
+
+    useEffect(() => {
+        if (!product?.id) return
+        let active = true
+            ; (async () => {
+                try {
+                    const latest = await getProductForAdminAction(product.id)
+                    if (!active || !latest) return
+                    setCurrentProduct(latest as any)
+                    setShowWarning(Boolean(latest?.purchaseWarning && String(latest.purchaseWarning).trim()))
+                    setVisibilityLevel(String(latest?.visibilityLevel ?? -1))
+                    setFormSeed((s) => s + 1)
+                } catch {
+                    // ignore
+                }
+            })()
+        return () => {
+            active = false
+        }
+    }, [product?.id])
 
     async function handleSubmit(formData: FormData) {
         if (submitLock.current) return
@@ -48,8 +73,8 @@ export default function ProductForm({ product, categories = [] }: { product?: an
                 <CardTitle>{product ? t('admin.productForm.editTitle') : t('admin.productForm.addTitle')}</CardTitle>
             </CardHeader>
             <CardContent>
-                <form action={handleSubmit} className="space-y-5">
-                    {product && <input type="hidden" name="id" value={product.id} />}
+                <form key={formSeed} action={handleSubmit} className="space-y-5">
+                    {currentProduct && <input type="hidden" name="id" value={currentProduct.id} />}
 
                     <div className="grid gap-2">
                         <Label htmlFor="slug">{t('admin.productForm.slugLabel')}</Label>
@@ -58,26 +83,26 @@ export default function ProductForm({ product, categories = [] }: { product?: an
                             <Input
                                 id="slug"
                                 name="slug"
-                                defaultValue={product?.id || ''}
+                                defaultValue={currentProduct?.id || ''}
                                 placeholder={t('admin.productForm.slugPlaceholder')}
                                 pattern="^[a-zA-Z0-9_-]+$"
                                 className="flex-1"
-                                disabled={!!product}
+                                disabled={!!currentProduct}
                             />
                         </div>
                         <p className="text-xs text-muted-foreground">
-                            {product ? t('admin.productForm.slugReadonly') : t('admin.productForm.slugHint')}
+                            {currentProduct ? t('admin.productForm.slugReadonly') : t('admin.productForm.slugHint')}
                         </p>
                     </div>
 
                     <div className="grid gap-2">
                         <Label htmlFor="name">{t('admin.productForm.nameLabel')}</Label>
-                        <Input id="name" name="name" defaultValue={product?.name} placeholder={t('admin.productForm.namePlaceholder')} required />
+                        <Input id="name" name="name" defaultValue={currentProduct?.name} placeholder={t('admin.productForm.namePlaceholder')} required />
                     </div>
 
                     <div className="grid gap-2">
                         <Label htmlFor="price">{t('admin.productForm.priceLabel')}</Label>
-                        <Input id="price" name="price" type="number" step="0.01" defaultValue={product?.price} placeholder={t('admin.productForm.pricePlaceholder')} required />
+                        <Input id="price" name="price" type="number" step="0.01" defaultValue={currentProduct?.price} placeholder={t('admin.productForm.pricePlaceholder')} required />
                     </div>
 
                     <div className="grid gap-2">
@@ -87,19 +112,19 @@ export default function ProductForm({ product, categories = [] }: { product?: an
                             name="compareAtPrice"
                             type="number"
                             step="0.01"
-                            defaultValue={product?.compareAtPrice || ''}
+                            defaultValue={currentProduct?.compareAtPrice || ''}
                             placeholder={t('admin.productForm.compareAtPricePlaceholder')}
                         />
                     </div>
 
                     <div className="grid gap-2">
                         <Label htmlFor="purchaseLimit">{t('admin.productForm.purchaseLimitLabel') || "Purchase Limit (0 or empty for unlimited)"}</Label>
-                        <Input id="purchaseLimit" name="purchaseLimit" type="number" defaultValue={product?.purchaseLimit} placeholder={t('admin.productForm.purchaseLimitPlaceholder') || "e.g. 1"} />
+                        <Input id="purchaseLimit" name="purchaseLimit" type="number" defaultValue={currentProduct?.purchaseLimit} placeholder={t('admin.productForm.purchaseLimitPlaceholder') || "e.g. 1"} />
                     </div>
 
                     <div className="grid gap-2">
                         <Label htmlFor="category">{t('admin.productForm.categoryLabel')}</Label>
-                        <Input id="category" name="category" list="ldc-category-list" defaultValue={product?.category} placeholder={t('admin.productForm.categoryPlaceholder')} />
+                        <Input id="category" name="category" list="ldc-category-list" defaultValue={currentProduct?.category} placeholder={t('admin.productForm.categoryPlaceholder')} />
                         <datalist id="ldc-category-list">
                             {categories.map(c => (
                                 <option key={c.name} value={c.name} />
@@ -129,7 +154,7 @@ export default function ProductForm({ product, categories = [] }: { product?: an
                         <Checkbox
                             id="isShared"
                             name="isShared"
-                            defaultChecked={product?.isShared ?? false}
+                            defaultChecked={currentProduct?.isShared ?? false}
                             className="h-4 w-4 accent-primary"
                         />
                         <div className="flex flex-col">
@@ -142,7 +167,7 @@ export default function ProductForm({ product, categories = [] }: { product?: an
                         <Checkbox
                             id="isHot"
                             name="isHot"
-                            defaultChecked={!!product?.isHot}
+                            defaultChecked={!!currentProduct?.isHot}
                             className="h-4 w-4 accent-primary"
                         />
                         <Label htmlFor="isHot" className="cursor-pointer">{t('admin.productForm.isHotLabel')}</Label>
@@ -165,7 +190,7 @@ export default function ProductForm({ product, categories = [] }: { product?: an
                                 <Textarea
                                     id="purchaseWarning"
                                     name="purchaseWarning"
-                                    defaultValue={product?.purchaseWarning || ''}
+                                    defaultValue={currentProduct?.purchaseWarning || ''}
                                     placeholder={t('admin.productForm.purchaseWarningPlaceholder')}
                                     className="min-h-[60px]"
                                 />
@@ -176,7 +201,7 @@ export default function ProductForm({ product, categories = [] }: { product?: an
 
                     <div className="grid gap-2">
                         <Label htmlFor="image">{t('admin.productForm.imageLabel')}</Label>
-                        <Input id="image" name="image" defaultValue={product?.image} placeholder={t('admin.productForm.imagePlaceholder')} />
+                        <Input id="image" name="image" defaultValue={currentProduct?.image} placeholder={t('admin.productForm.imagePlaceholder')} />
                     </div>
 
                     <div className="grid gap-2">
@@ -184,7 +209,7 @@ export default function ProductForm({ product, categories = [] }: { product?: an
                         <Textarea
                             id="description"
                             name="description"
-                            defaultValue={product?.description}
+                            defaultValue={currentProduct?.description}
                             placeholder={t('admin.productForm.descPlaceholder')}
                             className="min-h-[80px]"
                         />

@@ -1,7 +1,7 @@
 import { db } from "./index";
 import { products, cards, orders, settings, reviews, loginUsers, categories, userNotifications, wishlistItems, wishlistVotes } from "./schema";
 import { INFINITE_STOCK, RESERVATION_TTL_MS } from "@/lib/constants";
-import { eq, sql, desc, and, asc, gte, or, inArray, lte } from "drizzle-orm";
+import { eq, sql, desc, and, asc, gte, or, inArray, lte, lt } from "drizzle-orm";
 import { updateTag } from "next/cache";
 import { cache } from "react";
 
@@ -1745,19 +1745,24 @@ export async function cancelExpiredOrders(filters: { productId?: string; userId?
     try {
         // No transaction - D1 doesn't support SQL transactions
         const fiveMinutesAgoMs = Date.now() - RESERVATION_TTL_MS;
-        const expired: any = await db.run(sql`
-            UPDATE orders
-            SET status = 'cancelled'
-            WHERE status = 'pending'
-              AND created_at < ${fiveMinutesAgoMs}
-              AND (${productId} IS NULL OR product_id = ${productId})
-              AND (${userId} IS NULL OR user_id = ${userId})
-              AND (${orderId} IS NULL OR order_id = ${orderId})
-            RETURNING order_id
-        `);
+        // Preselect expired orders because D1 may not return rows for UPDATE ... RETURNING
+        const candidates = await db
+            .select({ orderId: orders.orderId, productId: orders.productId })
+            .from(orders)
+            .where(and(
+                eq(orders.status, 'pending'),
+                lt(orders.createdAt, new Date(fiveMinutesAgoMs)),
+                productId ? eq(orders.productId, productId) : sql`1=1`,
+                userId ? eq(orders.userId, userId) : sql`1=1`,
+                orderId ? eq(orders.orderId, orderId) : sql`1=1`
+            ));
 
-        const orderIds = (expired.results || []).map((row: any) => row.order_id as string).filter(Boolean);
+        const orderIds = candidates.map((row) => row.orderId).filter(Boolean);
         if (!orderIds.length) return orderIds;
+
+        await db.update(orders)
+            .set({ status: 'cancelled' })
+            .where(inArray(orders.orderId, orderIds));
 
         try {
             await db.run(sql.raw(`ALTER TABLE cards ADD COLUMN reserved_order_id TEXT`));
@@ -1779,10 +1784,8 @@ export async function cancelExpiredOrders(filters: { productId?: string; userId?
         }
 
         try {
-            const productRows = await db.select({ productId: orders.productId })
-                .from(orders)
-                .where(inArray(orders.orderId, orderIds));
-            await recalcProductAggregatesForMany(productRows.map(r => r.productId));
+            const productIds = Array.from(new Set(candidates.map((row) => row.productId).filter(Boolean)));
+            await recalcProductAggregatesForMany(productIds);
         } catch {
             // best effort
         }

@@ -6,8 +6,9 @@ import { products, cards, reviews, categories } from "@/lib/db/schema"
 import { eq, sql, inArray, and, or, isNull, lte } from "drizzle-orm"
 import { sendTelegramMessage } from "@/lib/notifications"
 import { revalidatePath, updateTag } from "next/cache"
-import { setSetting, getSetting, recalcProductAggregates, recalcProductAggregatesForMany } from "@/lib/db/queries"
+import { setSetting, getSetting, recalcProductAggregates, recalcProductAggregatesForMany, getProductForAdmin } from "@/lib/db/queries"
 import { isAdminUsername } from "@/lib/admin-auth"
+import { unstable_noStore } from "next/cache"
 
 export async function checkAdmin() {
     const session = await auth()
@@ -142,6 +143,12 @@ export async function saveProduct(formData: FormData) {
     updateTag('home:ratings')
     updateTag('home:categories')
     updateTag('home:product-categories')
+}
+
+export async function getProductForAdminAction(id: string) {
+    await checkAdmin()
+    unstable_noStore()
+    return getProductForAdmin(id)
 }
 
 export async function deleteProduct(id: string) {

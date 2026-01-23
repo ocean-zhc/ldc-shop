@@ -190,7 +190,7 @@ export function AdminProductsContent({ products, lowStockThreshold }: AdminProdu
                                     <Link href={`/admin/cards/${product.id}`}>
                                         <Button variant="outline" size="sm">{t('admin.products.manageCards')}</Button>
                                     </Link>
-                                    <Link href={`/admin/product/edit/${product.id}`}>
+                                    <Link href={`/admin/product/edit/${product.id}`} prefetch={false}>
                                         <Button variant="outline" size="sm">{t('common.edit')}</Button>
                                     </Link>
                                     <Button variant="destructive" size="sm" onClick={() => handleDelete(product.id)} disabled={busy}>

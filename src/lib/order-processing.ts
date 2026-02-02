@@ -1,7 +1,55 @@
 import { db } from "@/lib/db";
-import { orders, cards } from "@/lib/db/schema";
+import { orders, cards, products } from "@/lib/db/schema";
 import { eq, sql } from "drizzle-orm";
 import { isPaymentOrder } from "@/lib/payment";
+import { createTokenByLinuxDoId } from "@/lib/siyuan-share";
+
+async function fulfillSiyuanToken(orderId: string, order: any, tradeNo: string): Promise<{ success: boolean; status: string }> {
+    const linuxDoId = order.userId;
+    if (!linuxDoId) {
+        console.error(`[Fulfill] Order ${orderId}: No userId (linuxDoId) on order, cannot create siyuan token`);
+        await db.update(orders)
+            .set({ status: 'paid', paidAt: new Date(), tradeNo })
+            .where(eq(orders.orderId, orderId));
+        return { success: true, status: 'processed' };
+    }
+
+    const quantity = order.quantity || 1;
+    const tokenKeys: string[] = [];
+
+    for (let i = 0; i < quantity; i++) {
+        const result = await createTokenByLinuxDoId(
+            linuxDoId,
+            `ldc-shop-${orderId}${quantity > 1 ? `-${i + 1}` : ''}`
+        );
+        if (result.success && result.token) {
+            tokenKeys.push(result.token);
+        } else {
+            console.error(`[Fulfill] Order ${orderId}: siyuan-share token creation failed: ${result.error}`);
+            break;
+        }
+    }
+
+    if (tokenKeys.length > 0) {
+        await db.update(orders)
+            .set({
+                status: 'delivered',
+                paidAt: new Date(),
+                deliveredAt: new Date(),
+                tradeNo,
+                cardKey: tokenKeys.join('\n'),
+            })
+            .where(eq(orders.orderId, orderId));
+        console.log(`[Fulfill] Order ${orderId}: siyuan token delivered (${tokenKeys.length}/${quantity})`);
+    } else {
+        await db.update(orders)
+            .set({ status: 'paid', paidAt: new Date(), tradeNo })
+            .where(eq(orders.orderId, orderId));
+        console.log(`[Fulfill] Order ${orderId}: siyuan token failed, marked as paid`);
+    }
+
+    return { success: true, status: 'processed' };
+}
 
 export async function processOrderFulfillment(orderId: string, paidAmount: number, tradeNo: string) {
     const order = await db.query.orders.findFirst({
@@ -34,6 +82,16 @@ export async function processOrderFulfillment(orderId: string, paidAmount: numbe
     }
 
     if (order.status === 'pending' || order.status === 'cancelled') {
+        // 判断商品发货类型
+        const product = await db.query.products.findFirst({
+            where: eq(products.id, order.productId)
+        });
+
+        if (product?.fulfillmentType === 'siyuan_token') {
+            return fulfillSiyuanToken(orderId, order, tradeNo);
+        }
+
+        // 默认：静态卡密发货
         const quantity = order.quantity || 1;
 
         await db.transaction(async (tx: any) => {
@@ -75,10 +133,6 @@ export async function processOrderFulfillment(orderId: string, paidAmount: numbe
                 console.log(`[Fulfill] Order ${orderId}: Found ${cardKeys.length} reserved cards, need ${needed} more.`);
 
                 if (supportsReservation) {
-                    // Try to claim strictly available cards (not reserved)
-                    // Or "stealable" cards (reserved long ago)
-                    // We need 'needed' amount.
-                    // LIMIT needed
                     const result = await tx.execute(sql`
                         UPDATE cards
                         SET is_used = true,
@@ -121,12 +175,6 @@ export async function processOrderFulfillment(orderId: string, paidAmount: numbe
             }
 
             console.log(`[Fulfill] Order ${orderId}: Cards claimed: ${cardKeys.length}/${quantity}`);
-
-            // Even if we got partial headers, we deliver what we have? 
-            // Or only if we have > 0?
-            // Usually we should have full amount if logic is sound. 
-            // If partial, it's better to deliver partial than nothing, but mark as delivered?
-            // User can contact admin.
 
             if (cardKeys.length > 0) {
                 const joinedKeys = cardKeys.join('\n');

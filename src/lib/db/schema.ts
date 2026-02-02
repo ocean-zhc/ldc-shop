@@ -14,6 +14,7 @@ export const products = pgTable('products', {
     isActive: boolean('is_active').default(true),
     sortOrder: integer('sort_order').default(0),
     purchaseLimit: integer('purchase_limit'),
+    fulfillmentType: text('fulfillment_type').default('card'), // 'card' | 'siyuan_token' | 'payment'
     createdAt: timestamp('created_at').defaultNow(),
 });
 

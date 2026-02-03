@@ -9,7 +9,7 @@ import { eq, sql, and, or, isNull, lt, gt } from "drizzle-orm"
 import { cookies } from "next/headers"
 import { updateTag } from "next/cache"
 import { after } from "next/server"
-import { notifyAdminPaymentSuccess } from "@/lib/notifications"
+import { notifyAdminPaymentSuccess, notifyAdminFulfillmentFailed } from "@/lib/notifications"
 import { sendOrderEmail } from "@/lib/email"
 import { INFINITE_STOCK, RESERVATION_TTL_MS } from "@/lib/constants"
 import { generateSiyuanShareToken, isSiyuanShareConfigured, SiyuanShareUserNotFoundError } from "@/lib/siyuan-share"
@@ -342,12 +342,13 @@ export async function createOrder(productId: string, quantity: number = 1, email
 
             if (isZeroPrice) {
                 let finalCardKeys = joinedKeys;
+                let orderStatus: 'paid' | 'delivered' = 'delivered';
 
                 console.log(`[Checkout] Zero-price order ${orderId}, isDynamic: ${isDynamic}, fulfillmentType: ${product.fulfillmentType}`);
 
-                // Handle dynamic fulfillment for zero-price orders
+                // Handle dynamic fulfillment for zero-price orders - ASYNC
                 if (isDynamic) {
-                    console.log(`[Checkout] Starting dynamic fulfillment for order ${orderId}`);
+                    console.log(`[Checkout] Dynamic order ${orderId}, will generate token async`);
                     if (!user?.id) {
                         throw new Error('login_required_for_dynamic');
                     }
@@ -355,18 +356,9 @@ export async function createOrder(productId: string, quantity: number = 1, email
                         console.error(`[Checkout] Siyuan-Share not configured!`);
                         throw new Error('siyuan_share_not_configured');
                     }
-                    try {
-                        const tokens = await generateSiyuanShareToken({
-                            orderId,
-                            linuxDoId: user.id,
-                            quantity: qty
-                        });
-                        finalCardKeys = tokens.join('\n');
-                        console.log(`[Checkout] Dynamic fulfillment success for order ${orderId}, tokens: ${tokens.length}`);
-                    } catch (err: any) {
-                        console.error(`[Checkout] Dynamic fulfillment failed for order ${orderId}:`, err.message);
-                        throw err;
-                    }
+                    // For dynamic products: insert as 'paid' first, generate token async
+                    orderStatus = 'paid';
+                    finalCardKeys = '';
                 } else {
                     const cardIds = reservedCards.map(c => c.id)
                     if (cardIds.length > 0) {
@@ -394,11 +386,11 @@ export async function createOrder(productId: string, quantity: number = 1, email
                     email: resolvedEmail,
                     userId: user?.id || null,
                     username: username || user?.username || null,
-                    status: 'delivered',
-                    cardKey: finalCardKeys,
+                    status: orderStatus,
+                    cardKey: finalCardKeys || null,
                     cardIds: isDynamic ? null : cardIdsValue,
                     paidAt: new Date(),
-                    deliveredAt: new Date(),
+                    deliveredAt: orderStatus === 'delivered' ? new Date() : null,
                     tradeNo: 'POINTS_REDEMPTION',
                     pointsUsed: pointsToUse,
                     quantity: qty,
@@ -406,7 +398,102 @@ export async function createOrder(productId: string, quantity: number = 1, email
                 });
                 orderInserted = true
 
-                if (user?.id) {
+                // For dynamic products, generate token in background
+                if (isDynamic && user?.id) {
+                    const userId = user.id;
+                    const userUsername = username || user?.username;
+                    const userEmail = resolvedEmail;
+                    const productName = product.name;
+                    const orderPointsUsed = pointsToUse;
+
+                    after(async () => {
+                        console.log(`[Checkout] Async token generation starting for order ${orderId}`);
+                        try {
+                            const tokens = await generateSiyuanShareToken({
+                                orderId,
+                                linuxDoId: userId,
+                                quantity: qty
+                            });
+                            const generatedKeys = tokens.join('\n');
+
+                            await db.update(orders)
+                                .set({
+                                    status: 'delivered',
+                                    deliveredAt: new Date(),
+                                    cardKey: generatedKeys
+                                })
+                                .where(eq(orders.orderId, orderId));
+
+                            console.log(`[Checkout] Async token generation success for order ${orderId}`);
+
+                            // Notify user
+                            try {
+                                await createUserNotification({
+                                    userId,
+                                    type: 'order_delivered',
+                                    titleKey: 'profile.notifications.orderDeliveredTitle',
+                                    contentKey: 'profile.notifications.orderDeliveredBody',
+                                    data: {
+                                        params: { orderId, productName },
+                                        href: `/order/${orderId}`
+                                    }
+                                });
+                            } catch { /* best effort */ }
+
+                            // Notify admin
+                            await notifyAdminPaymentSuccess({
+                                orderId,
+                                productName,
+                                amount: orderPointsUsed.toString() + ' (积分)',
+                                username: userUsername,
+                                email: userEmail,
+                                tradeNo: 'POINTS_REDEMPTION'
+                            }).catch(err => console.error('[Notification] Admin notify failed:', err));
+
+                            // Send email
+                            if (userEmail) {
+                                await sendOrderEmail({
+                                    to: userEmail,
+                                    orderId,
+                                    productName,
+                                    cardKeys: generatedKeys
+                                }).catch(err => console.error('[Email] Send failed:', err));
+                            }
+                        } catch (err: any) {
+                            console.error(`[Checkout] Async token generation failed for order ${orderId}:`, err.message);
+
+                            // Refund points
+                            let refundedPoints = false;
+                            if (orderPointsUsed > 0) {
+                                try {
+                                    await db.update(loginUsers)
+                                        .set({ points: sql`${loginUsers.points} + ${orderPointsUsed}` })
+                                        .where(eq(loginUsers.userId, userId));
+                                    refundedPoints = true;
+                                    console.log(`[Checkout] Refunded ${orderPointsUsed} points for order ${orderId}`);
+                                } catch (e) {
+                                    console.error(`[Checkout] Failed to refund points for order ${orderId}:`, e);
+                                }
+                            }
+
+                            // Mark order as refunded
+                            await db.update(orders)
+                                .set({ status: 'refunded' })
+                                .where(eq(orders.orderId, orderId));
+
+                            // Notify admin
+                            await notifyAdminFulfillmentFailed({
+                                orderId,
+                                productName,
+                                amount: orderPointsUsed.toString() + ' (积分)',
+                                username: userUsername,
+                                error: err.message,
+                                refunded: refundedPoints
+                            }).catch(e => console.error('[Notification] Admin failure notify failed:', e));
+                        }
+                    });
+                } else if (user?.id) {
+                    // Non-dynamic: notify user immediately
                     try {
                         await createUserNotification({
                             userId: user.id,
@@ -426,34 +513,35 @@ export async function createOrder(productId: string, quantity: number = 1, email
                     }
                 }
 
-                after(async () => {
-                    // Notify admin for points-only payment
-                    console.log('[Checkout] Points payment completed, sending notification for order:', orderId);
-                    try {
-                        await notifyAdminPaymentSuccess({
-                            orderId,
-                            productName: product.name,
-                            amount: pointsToUse.toString() + ' (积分)',
-                            username: username || user?.username,
-                            email: email || user?.email,
-                            tradeNo: 'POINTS_REDEMPTION'
-                        });
-                        console.log('[Checkout] Points payment notification sent successfully');
-                    } catch (err) {
-                        console.error('[Notification] Points payment notify failed:', err);
-                    }
+                // For non-dynamic products, send notifications in background
+                if (!isDynamic) {
+                    after(async () => {
+                        console.log('[Checkout] Points payment completed, sending notification for order:', orderId);
+                        try {
+                            await notifyAdminPaymentSuccess({
+                                orderId,
+                                productName: product.name,
+                                amount: pointsToUse.toString() + ' (积分)',
+                                username: username || user?.username,
+                                email: email || user?.email,
+                                tradeNo: 'POINTS_REDEMPTION'
+                            });
+                            console.log('[Checkout] Points payment notification sent successfully');
+                        } catch (err) {
+                            console.error('[Notification] Points payment notify failed:', err);
+                        }
 
-                    // Send email with card keys
-                    const orderEmail = resolvedEmail;
-                    if (orderEmail && finalCardKeys) {
-                        await sendOrderEmail({
-                            to: orderEmail,
-                            orderId,
-                            productName: product.name,
-                            cardKeys: finalCardKeys
-                        }).catch(err => console.error('[Email] Points payment email failed:', err));
-                    }
-                })
+                        const orderEmail = resolvedEmail;
+                        if (orderEmail && finalCardKeys) {
+                            await sendOrderEmail({
+                                to: orderEmail,
+                                orderId,
+                                productName: product.name,
+                                cardKeys: finalCardKeys
+                            }).catch(err => console.error('[Email] Points payment email failed:', err));
+                        }
+                    });
+                }
 
             } else {
                 await db.insert(orders).values({

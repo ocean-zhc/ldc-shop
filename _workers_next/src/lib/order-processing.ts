@@ -8,7 +8,7 @@ import { recalcProductAggregates, createUserNotification } from "@/lib/db/querie
 import { RESERVATION_TTL_MS } from "@/lib/constants";
 import { updateTag } from "next/cache";
 import { after } from "next/server";
-import { generateSiyuanShareToken, isSiyuanShareConfigured } from "@/lib/siyuan-share";
+import { generateSiyuanShareToken, isSiyuanShareConfigured, SiyuanShareUserNotFoundError } from "@/lib/siyuan-share";
 
 export async function processOrderFulfillment(orderId: string, paidAmount: number, tradeNo: string) {
     const order = await db.query.orders.findFirst({
@@ -114,10 +114,13 @@ export async function processOrderFulfillment(orderId: string, paidAmount: numbe
                     throw new Error('Siyuan-Share not configured');
                 }
 
+                if (!order.userId) {
+                    throw new Error('User login required for dynamic fulfillment');
+                }
+
                 const tokens = await generateSiyuanShareToken({
                     orderId: orderId,
-                    email: order.email,
-                    username: order.username,
+                    linuxDoId: order.userId,
                     quantity: order.quantity || 1
                 });
 
@@ -175,6 +178,11 @@ export async function processOrderFulfillment(orderId: string, paidAmount: numbe
                 await refreshAggregates();
                 return { success: true, status: 'processed' };
             } catch (error: any) {
+                // If user not found in siyuan-share, rethrow with user-friendly message
+                if (error instanceof SiyuanShareUserNotFoundError) {
+                    throw error;
+                }
+
                 console.error(`[Fulfill] Dynamic fulfillment failed for order ${orderId}:`, error.message);
                 // Mark as paid but not delivered - admin can manually fulfill
                 await db.update(orders)

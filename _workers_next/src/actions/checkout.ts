@@ -12,7 +12,7 @@ import { after } from "next/server"
 import { notifyAdminPaymentSuccess } from "@/lib/notifications"
 import { sendOrderEmail } from "@/lib/email"
 import { INFINITE_STOCK, RESERVATION_TTL_MS } from "@/lib/constants"
-import { generateSiyuanShareToken, isSiyuanShareConfigured } from "@/lib/siyuan-share"
+import { generateSiyuanShareToken, isSiyuanShareConfigured, SiyuanShareUserNotFoundError } from "@/lib/siyuan-share"
 
 const MAX_ORDER_QUANTITY = 10000
 
@@ -348,6 +348,9 @@ export async function createOrder(productId: string, quantity: number = 1, email
                 // Handle dynamic fulfillment for zero-price orders
                 if (isDynamic) {
                     console.log(`[Checkout] Starting dynamic fulfillment for order ${orderId}`);
+                    if (!user?.id) {
+                        throw new Error('login_required_for_dynamic');
+                    }
                     if (!isSiyuanShareConfigured()) {
                         console.error(`[Checkout] Siyuan-Share not configured!`);
                         throw new Error('siyuan_share_not_configured');
@@ -355,8 +358,7 @@ export async function createOrder(productId: string, quantity: number = 1, email
                     try {
                         const tokens = await generateSiyuanShareToken({
                             orderId,
-                            email: resolvedEmail,
-                            username: username || user?.username,
+                            linuxDoId: user.id,
                             quantity: qty
                         });
                         finalCardKeys = tokens.join('\n');

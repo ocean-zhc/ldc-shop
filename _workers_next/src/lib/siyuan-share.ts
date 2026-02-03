@@ -15,16 +15,6 @@ interface LoginResponse {
     };
 }
 
-interface CreateUserResponse {
-    code: number;
-    msg: string;
-    data?: {
-        id: string;
-        username: string;
-        email: string;
-    };
-}
-
 interface CreateTokenResponse {
     code: number;
     msg: string;
@@ -32,8 +22,17 @@ interface CreateTokenResponse {
         id: string;
         name: string;
         token: string;
+        userId: string;
+        username: string;
         createdAt: string;
     };
+}
+
+export class SiyuanShareUserNotFoundError extends Error {
+    constructor(linuxDoId: string) {
+        super(`用户未在 Siyuan-Share 注册，请先前往 https://siyuan-share.20210929.xyz/ 使用L站账号登录`);
+        this.name = 'SiyuanShareUserNotFoundError';
+    }
 }
 
 let cachedJwtToken: string | null = null;
@@ -78,46 +77,13 @@ async function getAdminToken(): Promise<string> {
 }
 
 /**
- * Create a new user in siyuan-share
+ * Create a token for user by their LinuxDO ID
  */
-async function createUser(params: {
-    username: string;
-    email: string;
-    expirationDays?: number;
-}): Promise<{ id: string; username: string; email: string }> {
+async function createTokenByLinuxDoId(linuxDoId: string, tokenName: string): Promise<string> {
     const apiUrl = process.env.SIYUAN_SHARE_API_URL;
     const token = await getAdminToken();
 
-    const response = await fetch(`${apiUrl}/api/admin/users`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-            username: params.username,
-            email: params.email,
-            expirationDays: params.expirationDays ?? null
-        })
-    });
-
-    const result: CreateUserResponse = await response.json();
-
-    if (result.code !== 0 || !result.data) {
-        throw new Error(`Siyuan-Share create user failed: ${result.msg || 'Unknown error'}`);
-    }
-
-    return result.data;
-}
-
-/**
- * Create a token for an existing user
- */
-async function createTokenForUser(userId: string, tokenName: string): Promise<string> {
-    const apiUrl = process.env.SIYUAN_SHARE_API_URL;
-    const token = await getAdminToken();
-
-    const response = await fetch(`${apiUrl}/api/admin/users/${userId}/tokens`, {
+    const response = await fetch(`${apiUrl}/api/admin/tokens/by-linuxdo/${linuxDoId}`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -128,6 +94,11 @@ async function createTokenForUser(userId: string, tokenName: string): Promise<st
 
     const result: CreateTokenResponse = await response.json();
 
+    // code 2 = user not found
+    if (result.code === 2 || response.status === 404) {
+        throw new SiyuanShareUserNotFoundError(linuxDoId);
+    }
+
     if (result.code !== 0 || !result.data?.token) {
         throw new Error(`Siyuan-Share create token failed: ${result.msg || 'Unknown error'}`);
     }
@@ -136,48 +107,30 @@ async function createTokenForUser(userId: string, tokenName: string): Promise<st
 }
 
 /**
- * Generate a siyuan-share API token for an order
+ * Generate siyuan-share API tokens for an order
  *
- * This creates a new user (if needed) and generates a token for them.
- * The token is returned as the fulfillment content.
+ * Requires the user to already exist in siyuan-share (via LinuxDO OAuth login).
+ * If user not found, throws SiyuanShareUserNotFoundError.
  */
 export async function generateSiyuanShareToken(params: {
     orderId: string;
-    email?: string | null;
-    username?: string | null;
+    linuxDoId: string;
     quantity?: number;
 }): Promise<string[]> {
-    const { orderId, quantity = 1 } = params;
+    const { orderId, linuxDoId, quantity = 1 } = params;
 
-    // Generate unique identifier for this order
-    const uniqueId = orderId.replace(/[^a-zA-Z0-9]/g, '').slice(-12);
-    const timestamp = Date.now().toString(36);
+    if (!linuxDoId) {
+        throw new Error('LinuxDO ID is required for siyuan-share token generation');
+    }
 
     const tokens: string[] = [];
 
     for (let i = 0; i < quantity; i++) {
-        const suffix = quantity > 1 ? `-${i + 1}` : '';
-        // Always use unique email based on order ID to avoid duplicates
-        const userEmail = `order-${uniqueId}${suffix}-${timestamp}@ldc-shop.local`;
-        const userName = `ldc-${uniqueId}${suffix}-${timestamp}`;
+        const suffix = quantity > 1 ? ` #${i + 1}` : '';
+        const tokenName = `LDC Shop - Order ${orderId}${suffix}`;
 
-        try {
-            // Step 1: Create user
-            const user = await createUser({
-                username: userName,
-                email: userEmail,
-                expirationDays: 30
-            });
-
-            // Step 2: Create token for user
-            const tokenName = `LDC Order ${orderId}${suffix}`;
-            const apiToken = await createTokenForUser(user.id, tokenName);
-
-            tokens.push(apiToken);
-        } catch (error: any) {
-            console.error(`[Siyuan-Share] Failed to generate token for order ${orderId}:`, error.message);
-            throw error;
-        }
+        const apiToken = await createTokenByLinuxDoId(linuxDoId, tokenName);
+        tokens.push(apiToken);
     }
 
     return tokens;

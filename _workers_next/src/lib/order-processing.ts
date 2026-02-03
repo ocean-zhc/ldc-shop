@@ -8,7 +8,7 @@ import { recalcProductAggregates, createUserNotification } from "@/lib/db/querie
 import { RESERVATION_TTL_MS } from "@/lib/constants";
 import { updateTag } from "next/cache";
 import { after } from "next/server";
-import { generateSiyuanShareToken, isSiyuanShareConfigured, SiyuanShareUserNotFoundError } from "@/lib/siyuan-share";
+import { generateSiyuanShareToken, isSiyuanShareConfigured } from "@/lib/siyuan-share";
 
 export async function processOrderFulfillment(orderId: string, paidAmount: number, tradeNo: string) {
     const order = await db.query.orders.findFirst({
@@ -109,62 +109,58 @@ export async function processOrderFulfillment(orderId: string, paidAmount: numbe
 
         // Handle dynamic fulfillment (siyuan_token)
         if (isDynamic) {
-            try {
-                if (!isSiyuanShareConfigured()) {
-                    throw new Error('Siyuan-Share not configured');
-                }
+            // First mark as paid immediately to respond to payment gateway quickly
+            await db.update(orders)
+                .set({
+                    status: 'paid',
+                    paidAt: new Date(),
+                    tradeNo: tradeNo,
+                    currentPaymentId: null
+                })
+                .where(eq(orders.orderId, orderId));
 
-                if (!order.userId) {
-                    throw new Error('User login required for dynamic fulfillment');
-                }
+            console.log(`[Fulfill] Dynamic order ${orderId} marked as paid, generating token async...`);
 
-                const tokens = await generateSiyuanShareToken({
-                    orderId: orderId,
-                    linuxDoId: order.userId,
-                    quantity: order.quantity || 1
-                });
-
-                const joinedKeys = tokens.join('\n');
-
-                await db.update(orders)
-                    .set({
-                        status: 'delivered',
-                        paidAt: new Date(),
-                        deliveredAt: new Date(),
-                        tradeNo: tradeNo,
-                        cardKey: joinedKeys,
-                        cardIds: null,
-                        currentPaymentId: null
-                    })
-                    .where(eq(orders.orderId, orderId));
-
-                console.log(`[Fulfill] Dynamic order ${orderId} delivered. Tokens: ${tokens.length}`);
-
+            // Generate token asynchronously in background
+            after(async () => {
                 try {
-                    await notifyUserDelivered(product?.name);
-                } catch (err) {
-                    console.error('[Notification] User delivery notify failed:', err);
-                }
-
-                after(async () => {
-                    try {
-                        const user = await db.query.loginUsers.findFirst({
-                            where: eq(users.userId, order.userId || ''),
-                            columns: { username: true }
-                        }).catch(() => null);
-
-                        await notifyAdminPaymentSuccess({
-                            orderId: orderId,
-                            productName: product?.name || 'Dynamic Product',
-                            amount: order.amount,
-                            username: user?.username,
-                            email: order.email,
-                            tradeNo: tradeNo
-                        });
-                    } catch (err) {
-                        console.error('[Notification] Dynamic product notify failed:', err);
+                    if (!isSiyuanShareConfigured()) {
+                        console.error(`[Fulfill] Siyuan-Share not configured for order ${orderId}`);
+                        return;
                     }
 
+                    if (!order.userId) {
+                        console.error(`[Fulfill] No userId for dynamic order ${orderId}`);
+                        return;
+                    }
+
+                    const tokens = await generateSiyuanShareToken({
+                        orderId: orderId,
+                        linuxDoId: order.userId,
+                        quantity: order.quantity || 1
+                    });
+
+                    const joinedKeys = tokens.join('\n');
+
+                    await db.update(orders)
+                        .set({
+                            status: 'delivered',
+                            deliveredAt: new Date(),
+                            cardKey: joinedKeys,
+                            cardIds: null
+                        })
+                        .where(eq(orders.orderId, orderId));
+
+                    console.log(`[Fulfill] Dynamic order ${orderId} delivered. Tokens: ${tokens.length}`);
+
+                    // Notify user
+                    try {
+                        await notifyUserDelivered(product?.name);
+                    } catch (err) {
+                        console.error('[Notification] User delivery notify failed:', err);
+                    }
+
+                    // Send email
                     if (order.email) {
                         await sendOrderEmail({
                             to: order.email,
@@ -173,45 +169,33 @@ export async function processOrderFulfillment(orderId: string, paidAmount: numbe
                             cardKeys: joinedKeys
                         }).catch(err => console.error('[Email] Send failed:', err));
                     }
-                });
-
-                await refreshAggregates();
-                return { success: true, status: 'processed' };
-            } catch (error: any) {
-                // If user not found in siyuan-share, rethrow with user-friendly message
-                if (error instanceof SiyuanShareUserNotFoundError) {
-                    throw error;
+                } catch (error: any) {
+                    console.error(`[Fulfill] Async token generation failed for order ${orderId}:`, error.message);
+                    // Order stays as 'paid', admin can manually fulfill
                 }
 
-                console.error(`[Fulfill] Dynamic fulfillment failed for order ${orderId}:`, error.message);
-                // Mark as paid but not delivered - admin can manually fulfill
-                await db.update(orders)
-                    .set({ status: 'paid', paidAt: new Date(), tradeNo: tradeNo })
-                    .where(eq(orders.orderId, orderId));
+                // Notify admin regardless of token generation result
+                try {
+                    const user = await db.query.loginUsers.findFirst({
+                        where: eq(users.userId, order.userId || ''),
+                        columns: { username: true }
+                    }).catch(() => null);
 
-                after(async () => {
-                    try {
-                        const user = await db.query.loginUsers.findFirst({
-                            where: eq(users.userId, order.userId || ''),
-                            columns: { username: true }
-                        }).catch(() => null);
+                    await notifyAdminPaymentSuccess({
+                        orderId: orderId,
+                        productName: product?.name || 'Dynamic Product',
+                        amount: order.amount,
+                        username: user?.username,
+                        email: order.email,
+                        tradeNo: tradeNo
+                    });
+                } catch (err) {
+                    console.error('[Notification] Dynamic product notify failed:', err);
+                }
+            });
 
-                        await notifyAdminPaymentSuccess({
-                            orderId: orderId,
-                            productName: product?.name || 'Dynamic Product',
-                            amount: order.amount,
-                            username: user?.username,
-                            email: order.email,
-                            tradeNo: tradeNo
-                        });
-                    } catch (err) {
-                        console.error('[Notification] Dynamic product notify failed:', err);
-                    }
-                });
-
-                await refreshAggregates();
-                return { success: true, status: 'processed' };
-            }
+            await refreshAggregates();
+            return { success: true, status: 'processed' };
         }
 
         if (isShared) {

@@ -165,7 +165,7 @@ export async function generateSiyuanShareToken(params: {
             const user = await createUser({
                 username: userName,
                 email: userEmail,
-                expirationDays: null // Never expire
+                expirationDays: undefined // Never expire
             });
 
             // Step 2: Create token for user

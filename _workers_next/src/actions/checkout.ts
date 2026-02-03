@@ -506,7 +506,17 @@ export async function createOrder(productId: string, quantity: number = 1, email
         if (error?.message === 'insufficient_points') {
             return { success: false, error: 'Points mismatch, please try again.' };
         }
-        throw error;
+        if (error instanceof SiyuanShareUserNotFoundError) {
+            return { success: false, error: error.message };
+        }
+        if (error?.message === 'login_required_for_dynamic') {
+            return { success: false, error: '请先登录后再购买此商品' };
+        }
+        if (error?.message === 'siyuan_share_not_configured') {
+            return { success: false, error: '服务暂不可用，请联系管理员' };
+        }
+        console.error('[Checkout] Unexpected error:', error);
+        return { success: false, error: '购买失败，请稍后重试' };
     }
 
     if (isZeroPrice) {

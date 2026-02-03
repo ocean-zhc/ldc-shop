@@ -53,6 +53,7 @@ interface BuyContentProps {
     reviewCount?: number
     canReview?: boolean
     reviewOrderId?: string
+    isDynamic?: boolean
 }
 
 export function BuyContent({
@@ -64,7 +65,8 @@ export function BuyContent({
     averageRating = 0,
     reviewCount = 0,
     canReview = false,
-    reviewOrderId
+    reviewOrderId,
+    isDynamic = false
 }: BuyContentProps) {
     const { t } = useI18n()
     const [shareUrl, setShareUrl] = useState('')
@@ -138,10 +140,10 @@ export function BuyContent({
                                 <span className="text-sm text-muted-foreground">{t('common.credits')}</span>
                                 <div className="mt-2">
                                     <Badge
-                                        variant={stockCount > 0 ? "outline" : "destructive"}
-                                        className={stockCount > 0 ? "border-primary/30 text-primary" : ""}
+                                        variant={isDynamic || stockCount > 0 ? "outline" : "destructive"}
+                                        className={isDynamic || stockCount > 0 ? "border-primary/30 text-primary" : ""}
                                     >
-                                        {stockCount > 0 ? `${t('common.stock')}: ${stockCount}` : t('common.outOfStock')}
+                                        {isDynamic ? `${t('common.stock')}: ∞` : (stockCount > 0 ? `${t('common.stock')}: ${stockCount}` : t('common.outOfStock'))}
                                     </Badge>
                                     {typeof product.purchaseLimit === 'number' && product.purchaseLimit > 0 && (
                                         <Badge variant="secondary" className="mt-2">

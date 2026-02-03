@@ -60,7 +60,8 @@ export default async function AdminPage() {
                 stockCount: p.stock,
                 isActive: p.isActive ?? true,
                 isHot: p.isHot ?? false,
-                sortOrder: p.sortOrder ?? 0
+                sortOrder: p.sortOrder ?? 0,
+                fulfillmentType: p.fulfillmentType ?? 'card'
             }))}
             stats={stats}
             shopName={shopName}

@@ -36,17 +36,20 @@ export default async function BuyPage({ params }: BuyPageProps) {
         }
     }
 
+    const isDynamic = product.fulfillmentType === 'siyuan_token';
+
     return (
         <BuyContent
             product={product}
-            stockCount={product.stock || 0}
-            lockedStockCount={product.locked || 0}
+            stockCount={isDynamic ? 999 : (product.stock || 0)}
+            lockedStockCount={isDynamic ? 0 : (product.locked || 0)}
             isLoggedIn={!!session?.user}
             reviews={reviews}
             averageRating={rating.average}
             reviewCount={rating.count}
             canReview={userCanReview.canReview}
             reviewOrderId={userCanReview.orderId}
+            isDynamic={isDynamic}
         />
     )
 }

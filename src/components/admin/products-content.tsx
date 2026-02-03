@@ -23,6 +23,7 @@ interface Product {
     isActive: boolean
     isHot: boolean
     sortOrder: number
+    fulfillmentType: string
 }
 
 interface Stats {
@@ -58,7 +59,7 @@ export function AdminProductsContent({ products, stats, shopName, visitorCount, 
 
     // Derived state directly to avoid Hook complexity/errors
     const threshold = Number.parseInt(thresholdValue, 10) || 5
-    const lowStockCount = (products || []).filter(p => p.stockCount <= threshold).length
+    const lowStockCount = (products || []).filter(p => p.fulfillmentType !== 'siyuan_token' && p.stockCount <= threshold).length
 
     const handleDelete = async (id: string) => {
         if (!confirm(t('admin.products.confirmDelete'))) return
@@ -362,9 +363,15 @@ export function AdminProductsContent({ products, stats, shopName, visitorCount, 
                                 </TableCell>
                                 <TableCell>
                                     <div className="flex items-center gap-2">
-                                        <span>{product.stockCount}</span>
-                                        {product.stockCount <= (Number.parseInt(thresholdValue, 10) || 5) && (
-                                            <Badge variant="destructive" className="text-[10px]">{t('admin.products.lowStock')}</Badge>
+                                        {product.fulfillmentType === 'siyuan_token' ? (
+                                            <Badge variant="outline" className="text-blue-600 border-blue-300">∞ 动态</Badge>
+                                        ) : (
+                                            <>
+                                                <span>{product.stockCount}</span>
+                                                {product.stockCount <= (Number.parseInt(thresholdValue, 10) || 5) && (
+                                                    <Badge variant="destructive" className="text-[10px]">{t('admin.products.lowStock')}</Badge>
+                                                )}
+                                            </>
                                         )}
                                     </div>
                                 </TableCell>

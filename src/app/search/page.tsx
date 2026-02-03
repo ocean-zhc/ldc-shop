@@ -46,7 +46,7 @@ export default async function SearchPage({
         image: p.image,
         category: p.category,
         isHot: p.isHot ?? false,
-        stockCount: p.stock,
+        stockCount: p.fulfillmentType === 'siyuan_token' ? 999 : p.stock,
         soldCount: p.sold || 0
       }))}
       categories={categories.map((c: any) => ({ name: c.name, icon: c.icon, sortOrder: c.sortOrder }))}

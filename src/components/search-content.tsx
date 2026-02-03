@@ -173,7 +173,7 @@ export function SearchContent(props: {
                       variant={product.stockCount > 0 ? "secondary" : "destructive"}
                       className={cn("text-[10px] h-5 px-1.5 whitespace-nowrap", product.stockCount > 0 ? "" : "")}
                     >
-                      {product.stockCount > 0 ? `${t('common.stock')} ${product.stockCount}` : t('common.outOfStock')}
+                      {product.stockCount >= 999 ? `${t('common.stock')} ∞` : (product.stockCount > 0 ? `${t('common.stock')} ${product.stockCount}` : t('common.outOfStock'))}
                     </Badge>
                   </div>
                   <Link href={`/buy/${product.id}`} className="w-full">

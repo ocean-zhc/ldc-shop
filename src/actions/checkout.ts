@@ -86,7 +86,10 @@ export async function createOrder(productId: string, quantity: number = 1, email
         return result[0]?.count || 0
     }
 
-    // 2. Check Stock
+    const isDynamic = product.fulfillmentType === 'siyuan_token';
+
+    // 2. Check Stock (skip for dynamic fulfillment)
+    if (!isDynamic) {
     let stock = 0
     try {
         stock = await getAvailableStock()
@@ -121,6 +124,7 @@ export async function createOrder(productId: string, quantity: number = 1, email
     }
 
     if (stock < quantity) return { success: false, error: 'buy.outOfStock' }
+    }
 
     // 3. Check Purchase Limit
     if (product.purchaseLimit && product.purchaseLimit > 0) {
@@ -328,6 +332,68 @@ export async function createOrder(productId: string, quantity: number = 1, email
         }
     }
 
+    // Dynamic fulfillment: create order directly without card reservation
+    const createDynamicOrder = async () => {
+        await ensureOrdersQuantityColumn();
+
+        if (pointsToUse > 0) {
+            const updatedUser = await db.update(loginUsers)
+                .set({ points: sql`${loginUsers.points} - ${pointsToUse}` })
+                .where(and(eq(loginUsers.userId, user!.id!), sql`${loginUsers.points} >= ${pointsToUse}`))
+                .returning({ points: loginUsers.points });
+
+            if (!updatedUser.length) {
+                throw new Error('insufficient_points');
+            }
+        }
+
+        if (isZeroPrice) {
+            // Zero price: trigger fulfillment immediately
+            const { processOrderFulfillment } = await import("@/lib/order-processing");
+            await db.insert(orders).values({
+                orderId,
+                productId: product.id,
+                productName: product.name,
+                amount: finalAmount.toString(),
+                email: email || user?.email || null,
+                userId: user?.id || null,
+                username: session?.user?.name || user?.username || null,
+                status: 'pending',
+                pointsUsed: pointsToUse,
+                quantity
+            });
+            await processOrderFulfillment(orderId, 0, 'POINTS_REDEMPTION');
+        } else {
+            await db.insert(orders).values({
+                orderId,
+                productId: product.id,
+                productName: product.name,
+                amount: finalAmount.toString(),
+                email: email || user?.email || null,
+                userId: user?.id || null,
+                username: session?.user?.name || user?.username || null,
+                status: 'pending',
+                pointsUsed: pointsToUse,
+                currentPaymentId: orderId,
+                quantity
+            });
+        }
+    };
+
+    if (isDynamic) {
+        // Dynamic fulfillment: must be logged in (need linuxdo ID)
+        if (!user?.id) {
+            return { success: false, error: 'buy.loginRequired' };
+        }
+        try {
+            await createDynamicOrder();
+        } catch (error: any) {
+            if (error?.message === 'insufficient_points') {
+                return { success: false, error: 'Points mismatch, please try again.' };
+            }
+            throw error;
+        }
+    } else {
     try {
         await reserveAndCreate();
     } catch (error: any) {
@@ -356,6 +422,7 @@ export async function createOrder(productId: string, quantity: number = 1, email
         } else {
             throw error;
         }
+    }
     }
 
     if (isZeroPrice) {

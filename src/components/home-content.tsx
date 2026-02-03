@@ -326,7 +326,7 @@ export function HomeContent({ products, announcement, visitorCount, categories: 
                                         )}
                                         <div className="flex items-center gap-2 mt-1">
                                             <span className="text-[10px] text-muted-foreground">
-                                                {t('common.stock')}: {product.stockCount}
+                                                {t('common.stock')}: {product.stockCount >= 999 ? '∞' : product.stockCount}
                                             </span>
                                             <span className="text-[10px] text-muted-foreground">
                                                 {t('common.sold')}: {product.soldCount}

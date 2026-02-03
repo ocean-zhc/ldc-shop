@@ -62,7 +62,10 @@ const messages = {
         refundTitle: '↩️ 收到退款申请',
         reason: '原因',
         noReason: '未提供原因',
-        manageRefunds: '管理退款'
+        manageRefunds: '管理退款',
+        fulfillmentFailedTitle: '⚠️ Token生成失败！',
+        error: '错误',
+        manualFulfill: '需要手动发货'
     },
     en: {
         paymentTitle: '💰 New Payment Received!',
@@ -76,7 +79,10 @@ const messages = {
         refundTitle: '↩️ Refund Requested',
         reason: 'Reason',
         noReason: 'No reason provided',
-        manageRefunds: 'Manage Refunds'
+        manageRefunds: 'Manage Refunds',
+        fulfillmentFailedTitle: '⚠️ Token Generation Failed!',
+        error: 'Error',
+        manualFulfill: 'Manual fulfillment required'
     }
 }
 
@@ -124,6 +130,35 @@ export async function notifyAdminRefundRequest(order: {
 <b>${t.reason}:</b> ${order.reason || t.noReason}
 
 <a href="${process.env.NEXT_PUBLIC_APP_URL}/admin/refunds">${t.manageRefunds}</a>
+`.trim()
+
+    return sendTelegramMessage(text)
+}
+
+export async function notifyAdminFulfillmentFailed(order: {
+    orderId: string,
+    productName: string,
+    amount: string,
+    username?: string | null,
+    error: string,
+    refunded: boolean
+}) {
+    const { language } = await getNotificationSettings()
+    const t = messages[language as keyof typeof messages] || messages.zh
+
+    const refundStatus = order.refunded ? '✅ 已自动退款' : '❌ 退款失败，需手动处理'
+
+    const text = `
+<b>${t.fulfillmentFailedTitle}</b>
+
+<b>${t.order}:</b> <code>${order.orderId}</code>
+<b>${t.product}:</b> ${order.productName}
+<b>${t.amount}:</b> ${order.amount}
+<b>${t.user}:</b> ${order.username || t.guest}
+<b>${t.error}:</b> ${order.error}
+<b>退款状态:</b> ${refundStatus}
+
+<a href="${process.env.NEXT_PUBLIC_APP_URL}/admin/orders">${t.manualFulfill}</a>
 `.trim()
 
     return sendTelegramMessage(text)

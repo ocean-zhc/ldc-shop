@@ -2,13 +2,14 @@ import { db } from "@/lib/db";
 import { orders, cards, products, loginUsers as users } from "@/lib/db/schema";
 import { eq, sql } from "drizzle-orm";
 import { isPaymentOrder } from "@/lib/payment";
-import { notifyAdminPaymentSuccess } from "@/lib/notifications";
+import { notifyAdminPaymentSuccess, notifyAdminFulfillmentFailed } from "@/lib/notifications";
 import { sendOrderEmail } from "@/lib/email";
 import { recalcProductAggregates, createUserNotification } from "@/lib/db/queries";
 import { RESERVATION_TTL_MS } from "@/lib/constants";
 import { updateTag } from "next/cache";
 import { after } from "next/server";
 import { generateSiyuanShareToken, isSiyuanShareConfigured } from "@/lib/siyuan-share";
+import { internalAutoRefund } from "@/actions/refund";
 
 export async function processOrderFulfillment(orderId: string, paidAmount: number, tradeNo: string) {
     const order = await db.query.orders.findFirst({
@@ -123,15 +124,18 @@ export async function processOrderFulfillment(orderId: string, paidAmount: numbe
 
             // Generate token asynchronously in background
             after(async () => {
+                const user = await db.query.loginUsers.findFirst({
+                    where: eq(users.userId, order.userId || ''),
+                    columns: { username: true }
+                }).catch(() => null);
+
                 try {
                     if (!isSiyuanShareConfigured()) {
-                        console.error(`[Fulfill] Siyuan-Share not configured for order ${orderId}`);
-                        return;
+                        throw new Error('Siyuan-Share not configured');
                     }
 
                     if (!order.userId) {
-                        console.error(`[Fulfill] No userId for dynamic order ${orderId}`);
-                        return;
+                        throw new Error('No userId for dynamic order');
                     }
 
                     const tokens = await generateSiyuanShareToken({
@@ -169,18 +173,8 @@ export async function processOrderFulfillment(orderId: string, paidAmount: numbe
                             cardKeys: joinedKeys
                         }).catch(err => console.error('[Email] Send failed:', err));
                     }
-                } catch (error: any) {
-                    console.error(`[Fulfill] Async token generation failed for order ${orderId}:`, error.message);
-                    // Order stays as 'paid', admin can manually fulfill
-                }
 
-                // Notify admin regardless of token generation result
-                try {
-                    const user = await db.query.loginUsers.findFirst({
-                        where: eq(users.userId, order.userId || ''),
-                        columns: { username: true }
-                    }).catch(() => null);
-
+                    // Notify admin of success
                     await notifyAdminPaymentSuccess({
                         orderId: orderId,
                         productName: product?.name || 'Dynamic Product',
@@ -188,9 +182,24 @@ export async function processOrderFulfillment(orderId: string, paidAmount: numbe
                         username: user?.username,
                         email: order.email,
                         tradeNo: tradeNo
-                    });
-                } catch (err) {
-                    console.error('[Notification] Dynamic product notify failed:', err);
+                    }).catch(err => console.error('[Notification] Admin notify failed:', err));
+
+                } catch (error: any) {
+                    console.error(`[Fulfill] Async token generation failed for order ${orderId}:`, error.message);
+
+                    // Auto refund
+                    const refundResult = await internalAutoRefund(orderId);
+                    console.log(`[Fulfill] Auto refund for order ${orderId}:`, refundResult);
+
+                    // Notify admin of failure
+                    await notifyAdminFulfillmentFailed({
+                        orderId: orderId,
+                        productName: product?.name || 'Dynamic Product',
+                        amount: order.amount,
+                        username: user?.username,
+                        error: error.message,
+                        refunded: refundResult.success
+                    }).catch(err => console.error('[Notification] Admin failure notify failed:', err));
                 }
             });
 

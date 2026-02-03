@@ -7,6 +7,89 @@ import { revalidatePath, updateTag } from "next/cache"
 import { getSetting, recalcProductAggregates } from "@/lib/db/queries"
 import { checkAdmin } from "@/actions/admin"
 
+/**
+ * Internal refund function - calls payment gateway and marks order as refunded.
+ * Used for automatic refund on fulfillment failure.
+ * Returns { success: boolean, error?: string }
+ */
+export async function internalAutoRefund(orderId: string): Promise<{ success: boolean; error?: string }> {
+    const pid = process.env.MERCHANT_ID
+    const key = process.env.MERCHANT_KEY
+
+    if (!pid || !key) {
+        return { success: false, error: 'Missing merchant config' }
+    }
+
+    const order = await db.query.orders.findFirst({ where: eq(orders.orderId, orderId) })
+    if (!order) {
+        return { success: false, error: 'Order not found' }
+    }
+    if (!order.tradeNo) {
+        return { success: false, error: 'Missing trade_no' }
+    }
+
+    try {
+        const body = new URLSearchParams({
+            pid,
+            key,
+            trade_no: order.tradeNo,
+            out_trade_no: order.orderId,
+            money: Number(order.amount).toFixed(2),
+        })
+
+        const resp = await fetch('https://credit.linux.do/epay/api.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body
+        })
+
+        const text = await resp.text()
+
+        let success = false
+        try {
+            const json = JSON.parse(text)
+            success = json?.code === 1 || json?.status === 'success' || json?.msg === 'success'
+        } catch {
+            success = /success/i.test(text)
+        }
+
+        if (success) {
+            // Mark order as refunded
+            await markOrderRefundedInternal(orderId, order)
+            return { success: true }
+        }
+
+        return { success: false, error: `Gateway returned: ${text.slice(0, 200)}` }
+    } catch (e: any) {
+        return { success: false, error: e.message }
+    }
+}
+
+/**
+ * Internal function to mark order as refunded (no admin check)
+ */
+async function markOrderRefundedInternal(orderId: string, order: any) {
+    // Refund points if used
+    if (order.userId && order.pointsUsed && order.pointsUsed > 0) {
+        await db.update(loginUsers)
+            .set({ points: sql`${loginUsers.points} + ${order.pointsUsed}` })
+            .where(eq(loginUsers.userId, order.userId))
+    }
+
+    // Update order status
+    await db.update(orders).set({ status: 'refunded' }).where(eq(orders.orderId, orderId))
+
+    // For dynamic products, no cards to reclaim
+    // Recalc aggregates
+    if (order.productId) {
+        try {
+            await recalcProductAggregates(order.productId)
+        } catch {
+            // best effort
+        }
+    }
+}
+
 export async function markOrderRefunded(orderId: string) {
     await checkAdmin()
 

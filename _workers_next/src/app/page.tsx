@@ -69,9 +69,12 @@ export default async function Home({
 
   const productsWithRatings = products.map((p: any) => {
     const stat = liveStats.get(p.id) || { unused: 0, available: 0, locked: 0 };
-    const available = p.isShared
-      ? (stat.unused > 0 ? INFINITE_STOCK : 0)
-      : stat.available;
+    const isDynamic = p.fulfillmentType === 'siyuan_token';
+    const available = isDynamic
+      ? INFINITE_STOCK
+      : (p.isShared
+        ? (stat.unused > 0 ? INFINITE_STOCK : 0)
+        : stat.available);
     const locked = stat.locked;
     const stockTotal = available >= INFINITE_STOCK ? INFINITE_STOCK : (available + locked);
     // const rating = ratingsMap.get(p.id) || { average: 0, count: 0 };

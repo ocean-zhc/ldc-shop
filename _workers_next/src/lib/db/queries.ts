@@ -9,7 +9,7 @@ import { cache } from "react";
 let dbInitialized = false;
 let loginUsersSchemaReady = false;
 let wishlistTablesReady = false;
-const CURRENT_SCHEMA_VERSION = 14;
+const CURRENT_SCHEMA_VERSION = 15;
 
 async function ensureCardKeyDuplicatesAllowed() {
     try {
@@ -351,6 +351,7 @@ async function ensureProductsColumns() {
     await safeAddColumn('products', 'is_hot', 'INTEGER DEFAULT 0');
     await safeAddColumn('products', 'purchase_warning', 'TEXT');
     await safeAddColumn('products', 'is_shared', 'INTEGER DEFAULT 0');
+    await safeAddColumn('products', 'fulfillment_type', "TEXT DEFAULT 'card'");
     await safeAddColumn('products', 'visibility_level', 'INTEGER DEFAULT -1');
     await safeAddColumn('products', 'stock_count', 'INTEGER DEFAULT 0');
     await safeAddColumn('products', 'locked_count', 'INTEGER DEFAULT 0');
@@ -429,7 +430,7 @@ export async function recalcProductAggregates(productId: string) {
 
     const product = await db.query.products.findFirst({
         where: eq(products.id, pid),
-        columns: { isShared: true }
+        columns: { isShared: true, fulfillmentType: true }
     });
     if (!product) return;
 
@@ -483,7 +484,11 @@ export async function recalcProductAggregates(productId: string) {
         if (!isMissingTableOrColumn(error)) throw error;
     }
 
-    const stockCount = product.isShared ? (unusedCount > 0 ? INFINITE_STOCK : 0) : availableCount;
+    // Dynamic fulfillment (siyuan_token) = always infinite stock
+    // Shared card = infinite stock if at least 1 unused card
+    // Regular card = available count
+    const isDynamic = product.fulfillmentType === 'siyuan_token';
+    const stockCount = isDynamic ? INFINITE_STOCK : (product.isShared ? (unusedCount > 0 ? INFINITE_STOCK : 0) : availableCount);
 
     await db.update(products)
         .set({
@@ -515,6 +520,7 @@ export async function recalcProductAggregatesForMany(productIds: string[]) {
 
     const aggregates = new Map<string, {
         isShared: boolean;
+        fulfillmentType: string | null;
         unused: number;
         available: number;
         locked: number;
@@ -525,12 +531,13 @@ export async function recalcProductAggregatesForMany(productIds: string[]) {
 
     for (let i = 0; i < ids.length; i += QUERY_BATCH_SIZE) {
         const batch = ids.slice(i, i + QUERY_BATCH_SIZE);
-        const rows = await db.select({ id: products.id, isShared: products.isShared })
+        const rows = await db.select({ id: products.id, isShared: products.isShared, fulfillmentType: products.fulfillmentType })
             .from(products)
             .where(inArray(products.id, batch));
         for (const row of rows) {
             aggregates.set(row.id, {
                 isShared: !!row.isShared,
+                fulfillmentType: row.fulfillmentType || 'card',
                 unused: 0,
                 available: 0,
                 locked: 0,
@@ -615,7 +622,8 @@ export async function recalcProductAggregatesForMany(productIds: string[]) {
 
     const updates = existingIds.map((id) => {
         const agg = aggregates.get(id)!;
-        const stockCount = agg.isShared ? (agg.unused > 0 ? INFINITE_STOCK : 0) : agg.available;
+        const isDynamic = agg.fulfillmentType === 'siyuan_token';
+        const stockCount = isDynamic ? INFINITE_STOCK : (agg.isShared ? (agg.unused > 0 ? INFINITE_STOCK : 0) : agg.available);
         return {
             id,
             stockCount,
@@ -764,6 +772,7 @@ export async function getProducts() {
             isHot: products.isHot,
             isActive: products.isActive,
             isShared: products.isShared,
+            fulfillmentType: products.fulfillmentType,
             visibilityLevel: products.visibilityLevel,
             sortOrder: products.sortOrder,
             purchaseLimit: products.purchaseLimit,
@@ -803,6 +812,7 @@ export async function getActiveProducts(options?: { isLoggedIn?: boolean; trustL
             category: products.category,
             isHot: products.isHot,
             isShared: products.isShared,
+            fulfillmentType: products.fulfillmentType,
             purchaseLimit: products.purchaseLimit,
             visibilityLevel: products.visibilityLevel,
             stock: sql<number>`COALESCE(${products.stockCount}, 0)`,
@@ -900,6 +910,7 @@ export async function getProduct(id: string, options?: { isLoggedIn?: boolean; t
             isHot: products.isHot,
             isActive: products.isActive,
             isShared: products.isShared,
+            fulfillmentType: products.fulfillmentType,
             purchaseLimit: products.purchaseLimit,
             purchaseWarning: products.purchaseWarning,
             visibilityLevel: products.visibilityLevel,
@@ -1265,6 +1276,7 @@ export async function searchActiveProducts(params: {
             category: products.category,
             isHot: products.isHot,
             isShared: products.isShared,
+            fulfillmentType: products.fulfillmentType,
             purchaseLimit: products.purchaseLimit,
             stock: sql<number>`COALESCE(${products.stockCount}, 0)`,
             locked: sql<number>`COALESCE(${products.lockedCount}, 0)`,

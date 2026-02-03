@@ -28,9 +28,12 @@ export default async function AdminPage() {
         <AdminProductsContent
             products={products.map((p: any) => {
                 const stat = liveStats.get(p.id) || { unused: 0, available: 0, locked: 0 }
-                const available = p.isShared
-                    ? (stat.unused > 0 ? INFINITE_STOCK : 0)
-                    : stat.available
+                const isDynamic = p.fulfillmentType === 'siyuan_token'
+                const available = isDynamic
+                    ? INFINITE_STOCK
+                    : (p.isShared
+                        ? (stat.unused > 0 ? INFINITE_STOCK : 0)
+                        : stat.available)
                 const locked = stat.locked
                 const stockCount = available >= INFINITE_STOCK ? INFINITE_STOCK : (available + locked)
                 return {
@@ -42,7 +45,8 @@ export default async function AdminPage() {
                 stockCount,
                 isActive: p.isActive ?? true,
                 isHot: p.isHot ?? false,
-                sortOrder: p.sortOrder ?? 0
+                sortOrder: p.sortOrder ?? 0,
+                fulfillmentType: p.fulfillmentType ?? 'card'
             }})}
             lowStockThreshold={lowStockThreshold}
         />

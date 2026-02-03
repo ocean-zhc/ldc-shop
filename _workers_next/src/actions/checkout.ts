@@ -34,7 +34,8 @@ export async function createOrder(productId: string, quantity: number = 1, email
             name: true,
             price: true,
             purchaseLimit: true,
-            isShared: true
+            isShared: true,
+            fulfillmentType: true
         }
     })
     if (!product) return { success: false, error: 'buy.productNotFound' }
@@ -92,7 +93,14 @@ export async function createOrder(productId: string, quantity: number = 1, email
     const resolvedEmail = email || profileEmail || user?.email || null
 
     // 2. Check Stock
+    const isDynamic = product.fulfillmentType === 'siyuan_token'
+
     const getAvailableStock = async () => {
+        // For dynamic fulfillment (siyuan_token), always return infinite stock - no card needed
+        if (isDynamic) {
+            return INFINITE_STOCK;
+        }
+
         // For shared products, we just need ANY unused card to exist. Reservation status doesn't matter since we don't reserve.
         if (product.isShared) {
             const result = await db.select({ count: sql<number>`count(*)` })
@@ -159,8 +167,13 @@ export async function createOrder(productId: string, quantity: number = 1, email
 
         const reservedCards: { id: number, key: string }[] = []
 
+        // Dynamic fulfillment (siyuan_token): NO card reservation needed
+        if (isDynamic) {
+            // No cards to reserve. Will be fulfilled dynamically via API.
+            // reservedCards stays empty
+        }
         // If shared product, SKIP reservation logic. We just confirm we have stock (already checked above)
-        if (product.isShared) {
+        else if (product.isShared) {
             // For shared products, we don't lock cards. We just proceed.
             // But we need to pass a valid key to 'createOrderRecord' if it's a zero-price order for immediate fulfillment?
             // Actually createOrderRecord handles fulfillment logic slightly differently for zero price.

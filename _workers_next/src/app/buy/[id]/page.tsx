@@ -58,10 +58,13 @@ export default async function BuyPage({ params }: BuyPageProps) {
 
     const liveStats = product ? await getLiveCardStats([product.id]).catch(() => new Map()) : new Map()
     const stat = product ? (liveStats.get(product.id) || { unused: 0, available: 0, locked: 0 }) : { unused: 0, available: 0, locked: 0 }
+    const isDynamic = product?.fulfillmentType === 'siyuan_token'
     const liveAvailable = product
-        ? (product.isShared
-            ? (stat.unused > 0 ? INFINITE_STOCK : 0)
-            : stat.available)
+        ? (isDynamic
+            ? INFINITE_STOCK
+            : (product.isShared
+                ? (stat.unused > 0 ? INFINITE_STOCK : 0)
+                : stat.available))
         : 0
     const liveLocked = product ? stat.locked : 0
 

@@ -22,6 +22,7 @@ interface Product {
     isActive: boolean
     isHot: boolean
     sortOrder: number
+    fulfillmentType: string
 }
 
 interface AdminProductsContentProps {
@@ -171,9 +172,15 @@ export function AdminProductsContent({ products, lowStockThreshold }: AdminProdu
                                 </TableCell>
                                 <TableCell>
                                     <div className="flex items-center gap-2">
-                                        <span>{product.stockCount}</span>
-                                        {product.stockCount <= threshold && (
-                                            <Badge variant="destructive" className="text-[10px]">{t('admin.products.lowStock')}</Badge>
+                                        {product.fulfillmentType === 'siyuan_token' ? (
+                                            <Badge variant="outline" className="text-blue-600 border-blue-300">∞ 动态</Badge>
+                                        ) : (
+                                            <>
+                                                <span>{product.stockCount}</span>
+                                                {product.stockCount <= threshold && (
+                                                    <Badge variant="destructive" className="text-[10px]">{t('admin.products.lowStock')}</Badge>
+                                                )}
+                                            </>
                                         )}
                                     </div>
                                 </TableCell>

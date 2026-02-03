@@ -81,6 +81,7 @@ export async function getActiveProducts() {
             category: products.category,
             isHot: products.isHot,
             purchaseLimit: products.purchaseLimit,
+            fulfillmentType: products.fulfillmentType,
             stock: sql<number>`count(case when ${cards.id} IS NOT NULL AND COALESCE(${cards.isUsed}, false) = false AND (${cards.reservedAt} IS NULL OR ${cards.reservedAt} < NOW() - INTERVAL '5 minutes') then 1 end):: int`,
             locked: sql<number>`count(case when ${cards.id} IS NOT NULL AND COALESCE(${cards.isUsed}, false) = false AND (${cards.reservedAt} >= NOW() - INTERVAL '5 minutes') then 1 end):: int`,
             sold: sql<number>`count(case when COALESCE(${cards.isUsed}, false) = true then 1 end):: int`

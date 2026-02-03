@@ -186,9 +186,11 @@ export async function generateSiyuanShareToken(params: {
  * Check if siyuan-share is configured
  */
 export function isSiyuanShareConfigured(): boolean {
-    return !!(
-        process.env.SIYUAN_SHARE_API_URL &&
-        process.env.SIYUAN_SHARE_ADMIN_USERNAME &&
-        process.env.SIYUAN_SHARE_ADMIN_PASSWORD
-    );
+    const url = process.env.SIYUAN_SHARE_API_URL;
+    const username = process.env.SIYUAN_SHARE_ADMIN_USERNAME;
+    const password = process.env.SIYUAN_SHARE_ADMIN_PASSWORD;
+
+    console.log(`[Siyuan-Share] Config check - URL: ${url ? 'set' : 'MISSING'}, Username: ${username ? 'set' : 'MISSING'}, Password: ${password ? 'set' : 'MISSING'}`);
+
+    return !!(url && username && password);
 }

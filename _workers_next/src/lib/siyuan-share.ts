@@ -147,18 +147,19 @@ export async function generateSiyuanShareToken(params: {
     username?: string | null;
     quantity?: number;
 }): Promise<string[]> {
-    const { orderId, email, username, quantity = 1 } = params;
+    const { orderId, quantity = 1 } = params;
 
     // Generate unique identifier for this order
-    const uniqueId = orderId.replace(/[^a-zA-Z0-9]/g, '').slice(-8);
+    const uniqueId = orderId.replace(/[^a-zA-Z0-9]/g, '').slice(-12);
     const timestamp = Date.now().toString(36);
 
     const tokens: string[] = [];
 
     for (let i = 0; i < quantity; i++) {
         const suffix = quantity > 1 ? `-${i + 1}` : '';
-        const userEmail = email || `order-${uniqueId}${suffix}@ldc-shop.local`;
-        const userName = username || `order-${uniqueId}${suffix}-${timestamp}`;
+        // Always use unique email based on order ID to avoid duplicates
+        const userEmail = `order-${uniqueId}${suffix}-${timestamp}@ldc-shop.local`;
+        const userName = `ldc-${uniqueId}${suffix}-${timestamp}`;
 
         try {
             // Step 1: Create user

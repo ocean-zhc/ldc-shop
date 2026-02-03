@@ -343,18 +343,28 @@ export async function createOrder(productId: string, quantity: number = 1, email
             if (isZeroPrice) {
                 let finalCardKeys = joinedKeys;
 
+                console.log(`[Checkout] Zero-price order ${orderId}, isDynamic: ${isDynamic}, fulfillmentType: ${product.fulfillmentType}`);
+
                 // Handle dynamic fulfillment for zero-price orders
                 if (isDynamic) {
+                    console.log(`[Checkout] Starting dynamic fulfillment for order ${orderId}`);
                     if (!isSiyuanShareConfigured()) {
+                        console.error(`[Checkout] Siyuan-Share not configured!`);
                         throw new Error('siyuan_share_not_configured');
                     }
-                    const tokens = await generateSiyuanShareToken({
-                        orderId,
-                        email: resolvedEmail,
-                        username: username || user?.username,
-                        quantity: qty
-                    });
-                    finalCardKeys = tokens.join('\n');
+                    try {
+                        const tokens = await generateSiyuanShareToken({
+                            orderId,
+                            email: resolvedEmail,
+                            username: username || user?.username,
+                            quantity: qty
+                        });
+                        finalCardKeys = tokens.join('\n');
+                        console.log(`[Checkout] Dynamic fulfillment success for order ${orderId}, tokens: ${tokens.length}`);
+                    } catch (err: any) {
+                        console.error(`[Checkout] Dynamic fulfillment failed for order ${orderId}:`, err.message);
+                        throw err;
+                    }
                 } else {
                     const cardIds = reservedCards.map(c => c.id)
                     if (cardIds.length > 0) {

@@ -12,6 +12,7 @@ import { after } from "next/server"
 import { notifyAdminPaymentSuccess } from "@/lib/notifications"
 import { sendOrderEmail } from "@/lib/email"
 import { INFINITE_STOCK, RESERVATION_TTL_MS } from "@/lib/constants"
+import { generateSiyuanShareToken, isSiyuanShareConfigured } from "@/lib/siyuan-share"
 
 const MAX_ORDER_QUANTITY = 10000
 
@@ -340,19 +341,35 @@ export async function createOrder(productId: string, quantity: number = 1, email
             const cardIdsValue = uniqueCardIds.length > 0 ? uniqueCardIds.join(',') : null;
 
             if (isZeroPrice) {
-                const cardIds = reservedCards.map(c => c.id)
-                if (cardIds.length > 0) {
-                    if (product.isShared) {
-                        // For shared products, DO NOT mark as used.
-                        // Just update order status (below)
-                    } else {
-                        for (const cid of cardIds) {
-                            await db.update(cards).set({
-                                isUsed: true,
-                                usedAt: new Date(),
-                                reservedOrderId: null,
-                                reservedAt: null
-                            }).where(eq(cards.id, cid));
+                let finalCardKeys = joinedKeys;
+
+                // Handle dynamic fulfillment for zero-price orders
+                if (isDynamic) {
+                    if (!isSiyuanShareConfigured()) {
+                        throw new Error('siyuan_share_not_configured');
+                    }
+                    const tokens = await generateSiyuanShareToken({
+                        orderId,
+                        email: resolvedEmail,
+                        username: username || user?.username,
+                        quantity: qty
+                    });
+                    finalCardKeys = tokens.join('\n');
+                } else {
+                    const cardIds = reservedCards.map(c => c.id)
+                    if (cardIds.length > 0) {
+                        if (product.isShared) {
+                            // For shared products, DO NOT mark as used.
+                            // Just update order status (below)
+                        } else {
+                            for (const cid of cardIds) {
+                                await db.update(cards).set({
+                                    isUsed: true,
+                                    usedAt: new Date(),
+                                    reservedOrderId: null,
+                                    reservedAt: null
+                                }).where(eq(cards.id, cid));
+                            }
                         }
                     }
                 }
@@ -366,8 +383,8 @@ export async function createOrder(productId: string, quantity: number = 1, email
                     userId: user?.id || null,
                     username: username || user?.username || null,
                     status: 'delivered',
-                    cardKey: joinedKeys,
-                    cardIds: cardIdsValue,
+                    cardKey: finalCardKeys,
+                    cardIds: isDynamic ? null : cardIdsValue,
                     paidAt: new Date(),
                     deliveredAt: new Date(),
                     tradeNo: 'POINTS_REDEMPTION',
@@ -416,12 +433,12 @@ export async function createOrder(productId: string, quantity: number = 1, email
 
                     // Send email with card keys
                     const orderEmail = resolvedEmail;
-                    if (orderEmail) {
+                    if (orderEmail && finalCardKeys) {
                         await sendOrderEmail({
                             to: orderEmail,
                             orderId,
                             productName: product.name,
-                            cardKeys: joinedKeys
+                            cardKeys: finalCardKeys
                         }).catch(err => console.error('[Email] Points payment email failed:', err));
                     }
                 })

@@ -34,10 +34,11 @@ interface OrderContentProps {
     order: Order
     canViewKey: boolean
     isOwner: boolean
+    isDynamic?: boolean
     refundRequest: { status: string | null; reason: string | null } | null
 }
 
-export function OrderContent({ order, canViewKey, isOwner, refundRequest }: OrderContentProps) {
+export function OrderContent({ order, canViewKey, isOwner, isDynamic = false, refundRequest }: OrderContentProps) {
     const { t } = useI18n()
     const [reason, setReason] = useState("")
     const [submitting, setSubmitting] = useState(false)
@@ -77,19 +78,23 @@ export function OrderContent({ order, canViewKey, isOwner, refundRequest }: Orde
 
     const getStatusMessage = (status: string) => {
         switch (status) {
-            case 'paid': return isPayment ? t('payment.paidMessage') : t('order.stockDepleted')
+            case 'paid':
+                if (isPayment) return t('payment.paidMessage')
+                if (isDynamic) return t('order.generatingToken')
+                return t('order.stockDepleted')
             case 'cancelled': return t('order.cancelledMessage')
             case 'refunded': return t('order.orderRefunded')
             default: return t('order.waitingPayment')
         }
     }
 
-    // Auto-check status if pending
+    // Auto-check status if pending OR if dynamic product is paid (waiting for token generation)
     const router = useRouter()
+    const shouldPoll = order.status === 'pending' || (order.status === 'paid' && isDynamic)
 
     // Check status on mount and polling
     useEffect(() => {
-        if (order.status !== 'pending') return
+        if (!shouldPoll) return
 
         let mounted = true
         let intervalId: NodeJS.Timeout
@@ -97,8 +102,16 @@ export function OrderContent({ order, canViewKey, isOwner, refundRequest }: Orde
         const check = async () => {
             try {
                 const result = await checkOrderStatus(order.orderId)
-                if (result.success && (result.status === 'paid' || result.status === 'delivered') && mounted) {
+                if (!mounted) return
+
+                if (order.status === 'pending' && result.success && (result.status === 'paid' || result.status === 'delivered')) {
                     toast.success(t('order.paymentSuccess'))
+                    router.refresh()
+                } else if (order.status === 'paid' && isDynamic && result.success && result.status === 'delivered') {
+                    toast.success(t('order.tokenGenerated'))
+                    router.refresh()
+                } else if (order.status === 'paid' && isDynamic && result.success && result.status === 'refunded') {
+                    toast.error(t('order.tokenGenerationFailed'))
                     router.refresh()
                 }
             } catch (e) {
@@ -124,7 +137,7 @@ export function OrderContent({ order, canViewKey, isOwner, refundRequest }: Orde
             mounted = false
             clearInterval(intervalId)
         }
-    }, [order.status, order.orderId, router, t])
+    }, [order.status, order.orderId, router, t, isDynamic, shouldPoll])
 
     return (
         <main className="container py-12 max-w-2xl">
@@ -260,12 +273,16 @@ export function OrderContent({ order, canViewKey, isOwner, refundRequest }: Orde
                         <div className={`flex items-center justify-between gap-3 p-4 rounded-xl border ${order.status === 'paid'
                             ? (isPayment
                                 ? 'bg-green-500/10 text-green-600 dark:text-green-400 border-green-500/20'
-                                : 'bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/20')
+                                : (isDynamic
+                                    ? 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20'
+                                    : 'bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/20'))
                             : 'bg-muted/20 text-muted-foreground border-border/30'
                             }`}>
                             <div className="flex items-center gap-3">
                                 {order.status === 'paid' ? (
-                                    isPayment ? <CheckCircle2 className="h-5 w-5" /> : <AlertCircle className="h-5 w-5" />
+                                    isPayment ? <CheckCircle2 className="h-5 w-5" /> :
+                                    isDynamic ? <Loader2 className="h-5 w-5 animate-spin" /> :
+                                    <AlertCircle className="h-5 w-5" />
                                 ) : (
                                     <Clock className="h-5 w-5" />
                                 )}

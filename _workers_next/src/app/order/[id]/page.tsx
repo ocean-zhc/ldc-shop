@@ -1,6 +1,6 @@
 import { auth } from "@/lib/auth"
 import { db } from "@/lib/db"
-import { orders, refundRequests } from "@/lib/db/schema"
+import { orders, products, refundRequests } from "@/lib/db/schema"
 import { and, desc, eq } from "drizzle-orm"
 import { notFound } from "next/navigation"
 import { cookies } from "next/headers"
@@ -23,6 +23,16 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
     })
 
     if (!order) return notFound()
+
+    // Check if product is dynamic fulfillment type
+    let isDynamic = false
+    if (order.productId) {
+        const product = await db.query.products.findFirst({
+            where: eq(products.id, order.productId),
+            columns: { fulfillmentType: true }
+        })
+        isDynamic = product?.fulfillmentType === 'siyuan_token'
+    }
 
     // Access Control
     let canViewKey = false
@@ -62,6 +72,7 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
             }}
             canViewKey={canViewKey}
             isOwner={isOwner}
+            isDynamic={isDynamic}
             refundRequest={refundRequest ? { status: refundRequest.status, reason: refundRequest.reason } : null}
         />
     )
